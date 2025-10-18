@@ -1,41 +1,26 @@
 <!DOCTYPE html>
 <html lang="bn">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>File Share — Upload</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>File Upload — Free Tier</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
-  <div class="w-full max-w-2xl bg-white rounded-lg shadow p-6">
-    <h1 class="text-2xl font-semibold mb-4">ফাইল আপলোড & শেয়ার লিংক তৈরি করো</h1>
-
-    <label class="block mb-2 text-sm font-medium">আপনার ফাইল সমূহ (multiple)</label>
-    <input id="files" type="file" multiple class="block w-full mb-4">
-
-    <div class="mb-4">
-      <label class="block text-sm mb-1">Link expiration (optional)</label>
-      <select id="expiry" class="border p-2 rounded w-48">
-        <option value="0">No expiration</option>
-        <option value="1">1 day</option>
-        <option value="7" selected>7 days</option>
-        <option value="30">30 days</option>
-      </select>
-    </div>
-
+<body class="bg-gray-100 p-6 flex justify-center items-start min-h-screen">
+  <div class="w-full max-w-2xl bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-semibold mb-4">ফাইল আপলোড & লিংক তৈরি</h1>
+    <input type="file" id="files" multiple class="mb-4 w-full border p-2 rounded">
     <button id="generate" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Generate Link</button>
 
-    <div id="status" class="mt-4"></div>
-
+    <div id="status" class="mt-4 text-sm text-gray-700"></div>
     <div id="result" class="mt-4 hidden bg-green-50 p-3 rounded">
-      <p class="text-sm">Link তৈরি হয়েছে — নিচের লিংকে গিয়ে সব ফাইল preview/ডাউনলোড করতে পারবে:</p>
-      <a id="shareLink" class="text-indigo-600 break-all" target="_blank" rel="noopener"></a>
+      <p>Link তৈরি হয়েছে:</p>
+      <a id="shareLink" class="text-indigo-600 break-all" target="_blank"></a>
     </div>
   </div>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
 
   <script>
@@ -43,13 +28,12 @@
       apiKey: "AIzaSyBVbq8C3OaORt6yU1zWO8E7c3y7Y2VfQOo",
       authDomain: "massage-5800c.firebaseapp.com",
       projectId: "massage-5800c",
-      storageBucket: "massage-5800c.firebasestorage.app",
+      storageBucket: "massage-5800c.appspot.com",
       messagingSenderId: "796344060446",
       appId: "1:796344060446:web:b4514891fc2516513ffc0f",
       measurementId: "G-MVYC8GFX13"
     };
     firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
     const storage = firebase.storage();
 
     const filesInput = document.getElementById('files');
@@ -57,86 +41,64 @@
     const statusDiv = document.getElementById('status');
     const resultDiv = document.getElementById('result');
     const shareLinkEl = document.getElementById('shareLink');
-    const expirySelect = document.getElementById('expiry');
 
-    function humanFileSize(bytes) {
+    function humanFileSize(bytes){
       const units = ['B','KB','MB','GB','TB'];
-      let i = 0;
-      while(bytes >= 1024 && i < units.length-1) {
-        bytes /= 1024;
-        i++;
-      }
-      return bytes.toFixed(2) + ' ' + units[i];
+      let i=0; while(bytes>=1024 && i<units.length-1){ bytes/=1024; i++; } 
+      return bytes.toFixed(2)+' '+units[i];
     }
 
     generateBtn.addEventListener('click', async () => {
       const files = filesInput.files;
-      if (!files || files.length === 0) {
-        alert('একটা বা একাধিক ফাইল সিলেক্ট করো');
-        return;
-      }
+      if(!files || files.length===0){ alert('ফাইল সিলেক্ট করো'); return; }
 
       generateBtn.disabled = true;
-      statusDiv.innerHTML = `<p class="text-sm text-gray-700">Creating share entry...</p>`;
+      statusDiv.textContent = `Uploading ${files.length} file(s)...`;
 
       try {
-        // Firestore doc তৈরি করে shareId নাও
-        const shareDocRef = await db.collection('shares').add({
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          fileCount: files.length,
-          expireAt: null,
-        });
-        const shareId = shareDocRef.id;
+        // Generate shareId
+        const shareId = Date.now().toString(36) + Math.random().toString(36).substring(2,8);
 
-        // Expiry
-        const expiryDays = Number(expirySelect.value);
-        if (expiryDays > 0) {
-          const expireAt = new Date();
-          expireAt.setDate(expireAt.getDate() + expiryDays);
-          await shareDocRef.update({ expireAt: firebase.firestore.Timestamp.fromDate(expireAt) });
-        }
+        const uploadPromises = Array.from(files).map(f => new Promise(async (resolve, reject) => {
+          const safeName = Date.now()+'_'+f.name.replace(/\s+/g,'_');
+          const storageRef = storage.ref(`shares/${shareId}/${safeName}`);
+          const uploadTask = storageRef.put(f);
 
-        // Link আগে দেখাও (upload চলবে background-এ)
-        const fullLink = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}view.html?shareId=${shareId}`;
-        shareLinkEl.href = fullLink;
-        shareLinkEl.textContent = fullLink;
-        resultDiv.classList.remove('hidden');
-
-        statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading ${files.length} file(s)...</p>`;
-
-        // Parallel upload
-        const uploadPromises = Array.from(files).map(async f => {
-          return new Promise(async (resolve, reject) => {
-            const safeName = Date.now() + '_' + f.name.replace(/\s+/g,'_');
-            const storagePath = `shares/${shareId}/${safeName}`;
-            const uploadTask = storage.ref(storagePath).put(f);
-
-            uploadTask.on('state_changed', snapshot => {
-              const percent = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-              statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading ${f.name}: ${percent.toFixed(1)}%</p>`;
-            });
-
-            uploadTask.then(async snapshot => {
-              const downloadURL = await snapshot.ref.getDownloadURL();
-              resolve({
-                name: f.name,
-                size: f.size,
-                type: f.type || 'application/octet-stream',
-                path: storagePath,
-                url: downloadURL
-              });
-            }).catch(err => reject(err));
+          uploadTask.on('state_changed', snapshot => {
+            const percent = (snapshot.bytesTransferred / snapshot.totalBytes)*100;
+            statusDiv.textContent = `Uploading ${f.name}: ${percent.toFixed(1)}%`;
           });
-        });
+
+          uploadTask.then(async snap => {
+            const url = await snap.ref.getDownloadURL();
+            resolve({
+              name: f.name,
+              size: f.size,
+              type: f.type || 'application/octet-stream',
+              url
+            });
+          }).catch(err => reject(err));
+        }));
 
         const uploadedFiles = await Promise.all(uploadPromises);
-        // Firestore update
-        await shareDocRef.update({ files: uploadedFiles, fileCount: uploadedFiles.length });
 
-        statusDiv.innerHTML = `<p class="text-sm text-green-700">সব ফাইল আপলোড হয়েছে।</p>`;
-      } catch (err) {
+        // Save files.json in same shareId folder
+        const jsonRef = storage.ref(`shares/${shareId}/files.json`);
+        await jsonRef.putString(JSON.stringify({
+          createdAt: new Date().toISOString(),
+          files: uploadedFiles
+        }));
+
+        // Show link
+        const link = `${location.origin}${location.pathname.replace(/[^/]*$/,'')}view.html?shareId=${shareId}`;
+        shareLinkEl.href = link;
+        shareLinkEl.textContent = link;
+        resultDiv.classList.remove('hidden');
+        statusDiv.textContent = 'সব ফাইল আপলোড হয়েছে।';
+
+      } catch(err){
         console.error(err);
-        statusDiv.innerHTML = `<p class="text-sm text-red-600">Error: ${err.message}</p>`;
+        statusDiv.textContent = 'Error: '+err.message;
       } finally {
         generateBtn.disabled = false;
       }
