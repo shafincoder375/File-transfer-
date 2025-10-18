@@ -21,7 +21,6 @@
         <option value="7" selected>7 days</option>
         <option value="30">30 days</option>
       </select>
-      <p class="text-xs text-gray-500 mt-1">(যদি তোমার চান—Firestore doc এ একটি expireAt টাইমস্ট্যাম্প যোগ করা হবে)</p>
     </div>
 
     <button id="generate" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Generate Link</button>
@@ -34,13 +33,12 @@
     </div>
   </div>
 
-  <!-- Firebase (compat) -->
+  <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
 
   <script>
-    // তোমার দেওয়া config (প্রয়োজন হলে পরিবর্তন করো)
     const firebaseConfig = {
       apiKey: "AIzaSyBVbq8C3OaORt6yU1zWO8E7c3y7Y2VfQOo",
       authDomain: "massage-5800c.firebaseapp.com",
@@ -50,7 +48,6 @@
       appId: "1:796344060446:web:b4514891fc2516513ffc0f",
       measurementId: "G-MVYC8GFX13"
     };
-
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
     const storage = firebase.storage();
@@ -83,16 +80,15 @@
       statusDiv.innerHTML = `<p class="text-sm text-gray-700">Creating share entry...</p>`;
 
       try {
-        // প্রথমে Firestore এ একটি ডকুমেন্ট বানাও (id পেতে)
+        // Firestore doc তৈরি করে shareId নাও
         const shareDocRef = await db.collection('shares').add({
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           fileCount: files.length,
-          // expiry (optional)
           expireAt: null,
         });
-
         const shareId = shareDocRef.id;
-        // যদি expiry নির্বাচন করা থাকে
+
+        // Expiry
         const expiryDays = Number(expirySelect.value);
         if (expiryDays > 0) {
           const expireAt = new Date();
@@ -100,41 +96,44 @@
           await shareDocRef.update({ expireAt: firebase.firestore.Timestamp.fromDate(expireAt) });
         }
 
-        statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading ${files.length} file(s)...</p>`;
-
-        const uploadedFiles = [];
-        // আপলোড ফাইলগুলি লুপ করে আপলোড ও ডাউনলোডURL নাও
-        for (let i = 0; i < files.length; i++) {
-          const f = files[i];
-          const safeName = Date.now() + '_' + f.name.replace(/\s+/g,'_');
-          const storagePath = `shares/${shareId}/${safeName}`;
-          statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading (${i+1}/${files.length}): ${f.name} — ${humanFileSize(f.size)}</p>`;
-
-          const uploadTask = await storage.ref(storagePath).put(f);
-          const downloadURL = await uploadTask.ref.getDownloadURL();
-
-          uploadedFiles.push({
-            name: f.name,
-            size: f.size,
-            type: f.type || 'application/octet-stream',
-            path: storagePath,
-            url: downloadURL,
-            uploadedAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-        }
-
-        // আপডেট Firestore ডকুমেন্টে ফাইল মেটাডাটা যোগ করো
-        await shareDocRef.update({
-          files: uploadedFiles,
-          fileCount: uploadedFiles.length,
-        });
-
+        // Link আগে দেখাও (upload চলবে background-এ)
         const fullLink = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}view.html?shareId=${shareId}`;
         shareLinkEl.href = fullLink;
         shareLinkEl.textContent = fullLink;
         resultDiv.classList.remove('hidden');
-        statusDiv.innerHTML = `<p class="text-sm text-green-700">হোয়ালা! সব আপলোড সম্পন্ন হয়েছে।</p>`;
 
+        statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading ${files.length} file(s)...</p>`;
+
+        // Parallel upload
+        const uploadPromises = Array.from(files).map(async f => {
+          return new Promise(async (resolve, reject) => {
+            const safeName = Date.now() + '_' + f.name.replace(/\s+/g,'_');
+            const storagePath = `shares/${shareId}/${safeName}`;
+            const uploadTask = storage.ref(storagePath).put(f);
+
+            uploadTask.on('state_changed', snapshot => {
+              const percent = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+              statusDiv.innerHTML = `<p class="text-sm text-gray-700">Uploading ${f.name}: ${percent.toFixed(1)}%</p>`;
+            });
+
+            uploadTask.then(async snapshot => {
+              const downloadURL = await snapshot.ref.getDownloadURL();
+              resolve({
+                name: f.name,
+                size: f.size,
+                type: f.type || 'application/octet-stream',
+                path: storagePath,
+                url: downloadURL
+              });
+            }).catch(err => reject(err));
+          });
+        });
+
+        const uploadedFiles = await Promise.all(uploadPromises);
+        // Firestore update
+        await shareDocRef.update({ files: uploadedFiles, fileCount: uploadedFiles.length });
+
+        statusDiv.innerHTML = `<p class="text-sm text-green-700">সব ফাইল আপলোড হয়েছে।</p>`;
       } catch (err) {
         console.error(err);
         statusDiv.innerHTML = `<p class="text-sm text-red-600">Error: ${err.message}</p>`;
@@ -144,4 +143,4 @@
     });
   </script>
 </body>
-</html>
+  </html>
