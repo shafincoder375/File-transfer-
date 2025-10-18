@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>File Share — View</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen p-6">
+  <div class="max-w-4xl mx-auto bg-white rounded shadow p-6">
+    <div id="header" class="mb-4">
+      <h1 class="text-2xl font-semibold">Shared Files</h1>
+      <p id="meta" class="text-sm text-gray-600"></p>
+    </div>
+
+    <div id="filesContainer" class="space-y-4"></div>
+
+    <div class="mt-6 flex gap-3">
+      <button id="downloadAll" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Download All (ZIP)</button>
+      <a id="rawList" class="text-sm text-gray-600 self-center"></a>
+    </div>
+
+    <div id="error" class="text-red-600 mt-4"></div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
+
+  <!-- JSZip for zipping -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBVbq8C3OaORt6yU1zWO8E7c3y7Y2VfQOo",
+      authDomain: "massage-5800c.firebaseapp.com",
+      projectId: "massage-5800c",
+      storageBucket: "massage-5800c.firebasestorage.app",
+      messagingSenderId: "796344060446",
+      appId: "1:796344060446:web:b4514891fc2516513ffc0f",
+      measurementId: "G-MVYC8GFX13"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+
+    const params = new URLSearchParams(location.search);
+    const shareId = params.get('shareId');
+
+    const filesContainer = document.getElementById('filesContainer');
+    const metaEl = document.getElementById('meta');
+    const headerEl = document.getElementById('header');
+    const errorEl = document.getElementById('error');
+    const downloadAllBtn = document.getElementById('downloadAll');
+    const rawListEl = document.getElementById('rawList');
+
+    if (!shareId) {
+      errorEl.textContent = 'Invalid link: shareId missing.';
+    } else {
+      loadShare(shareId);
+    }
+
+    function isImage(type){
+      return type.startsWith('image/');
+    }
+    function isVideo(type){
+      return type.startsWith('video/');
+    }
+    function isAudio(type){
+      return type.startsWith('audio/');
+    }
+
+    async function loadShare(id){
+      try {
+        const doc = await db.collection('shares').doc(id).get();
+        if (!doc.exists) {
+          errorEl.textContent = 'এই লিংকটি খুঁজে পাওয়া যায়নি বা অপসারণ করা হয়েছে।';
+          return;
+        }
+        const data = doc.data();
+        // check expiry
+        if (data.expireAt && data.expireAt.toDate && data.expireAt.toDate() < new Date()) {
+          errorEl.textContent = 'এই লিংকটি মেয়াদ উত্তীর্ণ (expired)।';
+          return;
+        }
+
+        metaEl.textContent = `Created: ${data.createdAt ? data.createdAt.toDate().toLocaleString() : '—'} • ${data.fileCount || (data.files ? data.files.length : 0)} file(s)`;
+
+        const files = data.files || [];
+        rawListEl.textContent = `Share ID: ${id}`;
+
+        if (files.length === 0) {
+          filesContainer.innerHTML = '<p class="text-sm text-gray-600">কোনো ফাইল নেই।</p>';
+          return;
+        }
+
+        // render each file
+        files.forEach((f, idx) => {
+          const card = document.createElement('div');
+          card.className = 'p-4 border rounded flex gap-4 items-start';
+
+          const preview = document.createElement('div');
+          preview.className = 'w-40 flex-shrink-0';
+
+          if (isImage(f.type)) {
+            const img = document.createElement('img');
+            img.src = f.url;
+            img.alt = f.name;
+            img.className = 'max-w-full rounded';
+            preview.appendChild(img);
+          } else if (isVideo(f.type)) {
+            const v = document.createElement('video');
+            v.src = f.url;
+            v.controls = true;
+            v.className = 'w-full rounded';
+            preview.appendChild(v);
+          } else if (isAudio(f.type)) {
+            const a = document.createElement('audio');
+            a.src = f.url;
+            a.controls = true;
+            preview.appendChild(a);
+          } else {
+            // generic icon
+            const block = document.createElement('div');
+            block.className = 'flex items-center justify-center h-24 w-full bg-gray-100 rounded';
+            block.innerHTML = `<div class="text-sm text-gray-600 text-center">No preview<br>${f.name}</div>`;
+            preview.appendChild(block);
+          }
+
+          const meta = document.createElement('div');
+          meta.className = 'flex-1';
+
+          const title = document.createElement('div');
+          title.className = 'font-medium';
+          title.textContent = f.name;
+
+          const size = document.createElement('div');
+          size.className = 'text-sm text-gray-500';
+          size.textContent = `Type: ${f.type || '—'} • Size: ${f.size ? (f.size/1024/1024).toFixed(2) + ' MB' : '—'}`;
+
+          const actions = document.createElement('div');
+          actions.className = 'mt-2 flex gap-2';
+
+          const downloadBtn = document.createElement('a');
+          downloadBtn.href = f.url;
+          downloadBtn.download = f.name;
+          downloadBtn.className = 'px-3 py-1 bg-green-600 text-white rounded text-sm';
+          downloadBtn.textContent = 'Download';
+
+          const openNew = document.createElement('a');
+          openNew.href = f.url;
+          openNew.target = '_blank';
+          openNew.className = 'px-3 py-1 bg-gray-200 text-gray-800 rounded text-sm';
+          openNew.textContent = 'Open';
+
+          actions.appendChild(downloadBtn);
+          actions.appendChild(openNew);
+
+          meta.appendChild(title);
+          meta.appendChild(size);
+          meta.appendChild(actions);
+
+          card.appendChild(preview);
+          card.appendChild(meta);
+
+          filesContainer.appendChild(card);
+        });
+
+        // Wire up download all
+        downloadAllBtn.addEventListener('click', async () => {
+          downloadAllBtn.disabled = true;
+          downloadAllBtn.textContent = 'Preparing ZIP...';
+
+          try {
+            const zip = new JSZip();
+            // fetch each file as blob and add to zip
+            for (let i = 0; i < files.length; i++) {
+              const f = files[i];
+              const resp = await fetch(f.url);
+              const blob = await resp.blob();
+              zip.file(f.name, blob);
+            }
+            const content = await zip.generateAsync({type:"blob"});
+            const url = URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `share_${id}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            console.error(e);
+            alert('ZIP তৈরি করার সময় সমস্যা হয়েছে: ' + e.message);
+          } finally {
+            downloadAllBtn.disabled = false;
+            downloadAllBtn.textContent = 'Download All (ZIP)';
+          }
+        });
+
+      } catch (err) {
+        console.error(err);
+        errorEl.textContent = 'Error: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
